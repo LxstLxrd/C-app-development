@@ -1,0 +1,677 @@
+dotnet new sln -n Library
+dotnet new console -n Library.App
+dotnet new xunit -n Library.Tests
+dotnet sln add Library.App Library.Tests
+dotnet add Library.Tests reference Library.App
+
+----------------------------------------------------
+//NotFoundException.cs:   
+namespace Library.App.Exceptions;
+
+public sealed class NotFoundException : DomainException
+{
+    public string EntityName { get; }
+    public object Key { get; }
+
+    public NotFoundException(string entityName, object key)
+        : base("not_found", $"{entityName} с ключом '{key}' не найден.")
+    {
+        EntityName = entityName;
+        Key = key;
+    }
+}
+
+//BookUnavailableException.cs:
+
+C#
+namespace Library.App.Exceptions;
+
+public sealed class BookUnavailableException : DomainException
+{
+    public int BookId { get; }
+
+    public BookUnavailableException(int bookId)
+        : base("book_unavailable", $"Книга #{bookId} уже выдана другому читателю.")
+    {
+        BookId = bookId;
+    }
+}
+
+//LoanLimitExceededException.cs:
+
+C#
+namespace Library.App.Exceptions;
+
+public sealed class LoanLimitExceededException : DomainException
+{
+    public int ReaderId { get; }
+    public int Limit { get; }
+
+    public LoanLimitExceededException(int readerId, int limit)
+        : base("loan_limit_exceeded", $"Читатель #{readerId} уже держит максимальное число книг ({limit}).")
+    {
+        ReaderId = readerId;
+        Limit = limit;
+    }
+}
+
+//ReaderBlockedException.cs:
+
+C#
+namespace Library.App.Exceptions;
+
+public sealed class ReaderBlockedException : DomainException
+{
+    public int ReaderId { get; }
+
+    public ReaderBlockedException(int readerId)
+        : base("reader_blocked", $"Читатель #{readerId} заблокирован.")
+    {
+        ReaderId = readerId;
+    }
+}
+
+---------------------------------------------------------------------------------------------
+
+using Library.App.Data;
+using Library.App.Exceptions;
+using Library.App.Models;
+
+namespace Library.App.Services;
+
+public class LibraryService(InMemoryLibraryRepository repo)
+{
+    public const int MaxActiveLoans = 3;
+
+    public Loan LoanBook(int readerId, int bookId)
+    {
+        var reader = repo.FindReader(readerId);
+        if (reader is null)
+            throw new NotFoundException("Reader", readerId);
+
+        if (reader.IsBlocked)
+            throw new ReaderBlockedException(readerId);
+
+        var book = repo.FindBook(bookId);
+        if (book is null)
+            throw new NotFoundException("Book", bookId);
+
+        if (book.Status == BookStatus.Loaned)
+            throw new BookUnavailableException(bookId);
+
+        if (reader.Loans.Count(l => !l.IsReturned) >= MaxActiveLoans)
+            throw new LoanLimitExceededException(readerId, MaxActiveLoans);
+
+        var loan = new Loan
+        {
+            BookId = bookId,
+            DueDate = DateOnly.FromDateTime(DateTime.Today).AddDays(14)
+        };
+
+        book.Status = BookStatus.Loaned;
+        reader.Loans.Add(loan);
+        repo.Save();
+
+        return loan;
+    }
+    
+    // Методы возврата и поиска для уровней 2-3 будут добавлены ниже
+    public void ReturnBook(int readerId, int bookId) { /* ... */ }
+    public Book? FindByTitle(string title) { /* ... */ }
+}
+
+---------------------------------------------------------------------
+namespace Library.App.Exceptions;
+
+public sealed class LoanNotFoundException : DomainException
+{
+    public int ReaderId { get; }
+    public int BookId { get; }
+
+    public LoanNotFoundException(int readerId, int bookId)
+        : base("loan_not_found", $"У читателя #{readerId} не найдена активная выдача книги #{bookId}.")
+    {
+        ReaderId = readerId;
+        BookId = bookId;
+    }
+}
+
+----------------------------------------------------------------------
+public void ReturnBook(int readerId, int bookId)
+{
+    var reader = repo.FindReader(readerId) ?? throw new NotFoundException("Reader", readerId);
+    var book = repo.FindBook(bookId) ?? throw new NotFoundException("Book", bookId);
+
+    var loan = reader.Loans.FirstOrDefault(l => l.BookId == bookId && !l.IsReturned)
+               ?? throw new LoanNotFoundException(readerId, bookId);
+
+    loan.IsReturned = true;
+    book.Status = BookStatus.Available;
+    repo.Save();
+}
+
+-------------------------------------------------------------------------
+namespace Library.App.Exceptions;
+
+public sealed class DataAccessException : AppException
+{
+    public DataAccessException(string message, Exception inner)
+        : base("data_access_failed", message, inner)
+    {
+    }
+}
+----------------------------------------------------------------------------
+public void Save()
+{
+    try
+    {
+        WriteToStorage();
+    }
+    catch (IOException ex)
+    {
+        throw new DataAccessException("Не удалось сохранить данные в репозиторий", ex);
+    }
+}
+---------------------------------------------------------------------------
+public bool TryFindByTitle(string title, out Book? book)
+{
+    book = repo.GetBooks().FirstOrDefault(b => b.Title.Equals(title, StringComparison.OrdinalIgnoreCase));
+    return book is not null;
+}
+
+-------------------------------------------------------------------------
+namespace Library.App.Services;
+
+public readonly record struct Result<T>(T? Value, string? Error)
+{
+    public bool IsSuccess => Error is null;
+    public static Result<T> Ok(T value) => new(value, null);
+    public static Result<T> Fail(string error) => new(default, error);
+}
+---------------------------------------------------------------------------
+public Result<Reader> RegisterReader(string name, string email)
+{
+    if (string.IsNullOrWhiteSpace(name))
+        return Result<Reader>.Fail("Имя не может быть пустым");
+
+    if (string.IsNullOrWhiteSpace(email) || !email.Contains('@'))
+        return Result<Reader>.Fail("Некорректный email");
+
+    var readers = repo.GetReaders();
+    int newId = readers.Count > 0 ? readers.Max(r => r.Id) + 1 : 1;
+
+    var reader = new Reader
+    {
+        Id = newId,
+        Name = name,
+        Email = email
+    };
+
+    readers.Add(reader);
+    repo.Save();
+
+    return Result<Reader>.Ok(reader);
+}
+------------------------------------------------------------------------------
+using Library.App.Data;
+using Library.App.Exceptions;
+using Library.App.Services;
+
+var repo = new InMemoryLibraryRepository();
+var service = new LibraryService(repo);
+
+Run("1. Анна берёт книгу 1", () => service.LoanBook(1, 1));
+Run("2. Анна снова берёт книгу 1", () => service.LoanBook(1, 1));
+Run("3. Несуществующий читатель 99", () => service.LoanBook(99, 2));
+Run("4. Заблокированный Борис берёт книгу 2", () => service.LoanBook(2, 2));
+Run("5. Анна берёт книги 2 и 3", () => { service.LoanBook(1, 2); service.LoanBook(1, 3); });
+Run("6. Анна берёт четвёртую книгу", () => service.LoanBook(1, 4));
+Run("7. Анна возвращает книгу 4 (не брала)", () => service.ReturnBook(1, 4));
+
+// Сценарий сбоя хранилища
+repo.SimulateStorageFailure = true;
+Run("8. Выдача книги при сбое хранилища", () => service.ReturnBook(1, 1));
+repo.SimulateStorageFailure = false;
+
+// Проверка TryFindByTitle
+if (service.TryFindByTitle("Refactoring", out var found))
+    Console.WriteLine($"Найдена книга: {found!.Title}");
+else
+    Console.WriteLine("Книга не найдена");
+
+// Проверка Result-паттерна
+var regResult = service.RegisterResult("Вера", "vera@example.com");
+if (regResult.IsSuccess)
+    Console.WriteLine($"Зарегистрирован читатель #{regResult.Value!.Id}");
+else
+    Console.WriteLine($"Ошибка регистрации: {regResult.Error}");
+
+static void Run(string title, Action action)
+{
+    Console.WriteLine($"--- {title}");
+    try
+    {
+        action();
+        Console.WriteLine("OK");
+    }
+    // Уровень 3.1: Фильтры when для NotFoundException
+    catch (NotFoundException ex) when (ex.EntityName == "Reader")
+    {
+        Console.WriteLine($"Читатель не зарегистрирован. Оформите читательский билет (Ключ: {ex.Key}).");
+    }
+    catch (NotFoundException ex) when (ex.EntityName == "Book")
+    {
+        Console.WriteLine($"Книга отсутствует в каталоге (Ключ: {ex.Key}).");
+    }
+    catch (NotFoundException ex)
+    {
+        Console.WriteLine($"Не найдено: {ex.EntityName} #{ex.Key}");
+    }
+    catch (BookUnavailableException ex)
+    {
+        Console.WriteLine("Выберите другую книгу: " + ex.Message);
+    }
+    catch (LoanLimitExceededException ex)
+    {
+        Console.WriteLine($"Сначала верните одну из книг (Лимит: {ex.Limit}): {ex.Message}");
+    }
+    catch (ReaderBlockedException ex)
+    {
+        Console.WriteLine("Доступ заблокирован: " + ex.Message);
+    }
+    catch (LoanNotFoundException ex)
+    {
+        Console.WriteLine("Ошибка возврата: " + ex.Message);
+    }
+    catch (DataAccessException ex)
+    {
+        Console.WriteLine("Сервис временно недоступен, попробуйте позже.");
+        // Раскрываем innerException для отладки
+        if (ex.InnerException is not null)
+        {
+            Console.WriteLine($"[Debug InnerException]: {ex.InnerException.GetType().Name} -> {ex.InnerException.Message}");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("Непредвиденная ошибка. Подробности для разработчика:\n" + ex);
+    }
+}
+
+--------------------------------------------------------------------------------------------------
+using Library.App.Data;
+using Library.App.Exceptions;
+using Library.App.Services;
+
+namespace Library.Tests;
+
+public class LibraryServiceTests
+{
+    [Fact]
+    public void LoanBook_ReaderNotFound_ThrowsNotFoundException()
+    {
+        var service = new LibraryService(new InMemoryLibraryRepository());
+
+        var ex = Assert.Throws<NotFoundException>(() => service.LoanBook(99, 1));
+
+        Assert.Equal("Reader", ex.EntityName);
+        Assert.Equal(99, ex.Key);
+    }
+
+    [Fact]
+    public void LoanBook_BookUnavailable_ThrowsBookUnavailableException()
+    {
+        var repo = new InMemoryLibraryRepository();
+        var service = new LibraryService(repo);
+        
+        service.LoanBook(1, 1); // Первичная выдача
+
+        var ex = Assert.Throws<BookUnavailableException>(() => service.LoanBook(1, 1));
+        Assert.Equal(1, ex.BookId);
+    }
+
+    [Fact]
+    public void LoanBook_ReaderBlocked_ThrowsReaderBlockedException()
+    {
+        var repo = new InMemoryLibraryRepository();
+        var service = new LibraryService(repo);
+        // Читатель с ID=2 (Борис) по умолчанию заблокирован в InMemoryLibraryRepository
+
+        var ex = Assert.Throws<ReaderBlockedException>(() => service.LoanBook(2, 2));
+        Assert.Equal(2, ex.ReaderId);
+    }
+
+    [Fact]
+    public void Save_StorageFailure_ThrowsDataAccessExceptionWithIOExceptionInner()
+    {
+        var repo = new InMemoryLibraryRepository
+        {
+            SimulateStorageFailure = true
+        };
+        var service = new LibraryService(repo);
+
+        // Пытаемся совершить операцию, которая вызывает Save()
+        var ex = Assert.Throws<DataAccessException>(() => service.LoanBook(1, 1));
+
+        Assert.NotNull(ex.InnerException);
+        Assert.IsType<IOException>(ex.InnerException);
+    }
+}
+
+---------------------------------------------------------------------------------------------
+dotnet new web -n Library.Api
+dotnet sln add Library.Api
+
+dotnet add Library.Api package Serilog.AspNetCore
+dotnet add Library.Api package Serilog.Sinks.File
+
+using Library.App.Data;
+using Library.App.Exceptions;
+using Library.App.Services;
+using Serilog;
+using Serilog.Events;
+
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning) // Убираем шум от фреймворка
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.File("logs/app-.log", rollingInterval: RollingInterval.Day) // Запись в файл с ротацией по дням
+    .CreateLogger();
+
+try
+{
+    Log.Information("Приложение запускается");
+
+    var builder = WebApplication.CreateBuilder(args);
+    builder.Services.AddSerilog(); // Интегрируем Serilog в DI-контейнер ASP.NET Core
+
+    builder.Services.AddSingleton<InMemoryLibraryRepository>();
+    builder.Services.AddSingleton<LibraryService>();
+
+    var app = builder.Build();
+
+    app.MapGet("/books", (InMemoryLibraryRepository repo) => repo.GetBooks());
+    
+    app.MapGet("/books/{id:int}", (int id, InMemoryLibraryRepository repo) => 
+        repo.FindBook(id) is { } book ? Results.Ok(book) : Results.NotFound());
+
+    app.MapPost("/loans", (LoanRequest request, LibraryService service) =>
+    {
+        try
+        {
+            var loan = service.LoanBook(request.ReaderId, request.BookId);
+            return Results.Ok(loan);
+        }
+        catch (NotFoundException ex)
+        {
+            return Results.NotFound(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            return Results.BadRequest(ex.ToString());
+        }
+    });
+
+    app.MapPost("/returns", (LoanRequest request, LibraryService service) =>
+    {
+        try
+        {
+            service.ReturnBook(request.ReaderId, request.BookId);
+            return Results.Ok();
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(ex.Message);
+        }
+    });
+
+    app.MapPost("/admin/storage-failure", (bool enabled, InMemoryLibraryRepository repo) =>
+    {
+        repo.SimulateStorageFailure = enabled;
+        return Results.NoContent();
+    });
+
+    app.MapGet("/crash", () =>
+    {
+        throw new InvalidOperationException("Что-то пошло совсем не так");
+    });
+
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Приложение аварийно завершилось");
+}
+finally
+{
+    await Log.CloseAndFlushAsync();
+}
+
+public record LoanRequest(int ReaderId, int BookId);
+
+
+
+
+
+public class LibraryService(InMemoryLibraryRepository repo, ILogger<LibraryService> logger)
+{
+    public const int MaxActiveLoans = 3;
+
+    public Loan LoanBook(int readerId, int bookId)
+    {
+        var reader = repo.FindReader(readerId) ?? throw new NotFoundException("Reader", readerId);
+        if (reader.IsBlocked) throw new ReaderBlockedException(readerId);
+
+        var book = repo.FindBook(bookId) ?? throw new NotFoundException("Book", bookId);
+        if (book.Status == BookStatus.Loaned) throw new BookUnavailableException(bookId);
+
+        if (reader.Loans.Count(l => !l.IsReturned) >= MaxActiveLoans)
+            throw new LoanLimitExceededException(readerId, MaxActiveLoans);
+
+        var loan = new Loan
+        {
+            BookId = bookId,
+            DueDate = DateOnly.FromDateTime(DateTime.Today).AddDays(14)
+        };
+
+        book.Status = BookStatus.Loaned;
+        reader.Loans.Add(loan);
+        repo.Save();
+
+        // Структурированный лог успешной выдачи
+        logger.LogInformation("Книга {BookId} успешно выдана читателю {ReaderId} до {DueDate}", bookId, readerId, loan.DueDate);
+
+        return loan;
+    }
+
+    public void ReturnBook(int readerId, int bookId)
+    {
+        var reader = repo.FindReader(readerId) ?? throw new NotFoundException("Reader", readerId);
+        var book = repo.FindBook(bookId) ?? throw new NotFoundException("Book", bookId);
+
+        var loan = reader.Loans.FirstOrDefault(l => l.BookId == bookId && !l.IsReturned)
+                   ?? throw new LoanNotFoundException(readerId, bookId);
+
+        loan.IsReturned = true;
+        book.Status = BookStatus.Available;
+        repo.Save();
+
+        // Структурированный лог возврата
+        logger.LogInformation("Книга {BookId} возвращена читателем {ReaderId}", bookId, readerId);
+    }
+}
+
+
+
+
+
+using Library.App.Exceptions;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Mvc;
+
+namespace Library.Api;
+
+public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
+{
+    public async ValueTask<bool> TryHandleAsync(HttpContext context, Exception exception, CancellationToken ct)
+    {
+        logger.LogError(exception, "Ошибка при обработке запроса {Path}", context.Request.Path);
+
+        var (status, title) = exception switch
+        {
+            NotFoundException => (StatusCodes.Status404NotFound, "Ресурс не найден"),
+            DataAccessException => (StatusCodes.Status503ServiceUnavailable, "Сервис временно недоступен"),
+            DomainException => (StatusCodes.Status422UnprocessableEntity, "Нарушено бизнес-правило"),
+            _ => (StatusCodes.Status500InternalServerError, "Внутренняя ошибка сервера")
+        };
+
+        var problem = new ProblemDetails
+        {
+            Status = status,
+            Title = title,
+            Detail = exception.Message
+        };
+
+        if (exception is AppException appException)
+        {
+            problem.Extensions["errorCode"] = appException.ErrorCode;
+        }
+
+        context.Response.StatusCode = status;
+        await context.Response.WriteAsJsonAsync(problem, ct);
+
+        return true; // Исключение успешно перехвачено и обработано
+    }
+}
+
+
+
+
+
+
+
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+
+var app = builder.Build();
+
+app.UseExceptionHandler(); // Сразу после Build(), до всех Map...
+
+
+
+
+
+
+
+app.MapGet("/books/{id:int}", (int id, InMemoryLibraryRepository repo) =>
+{
+    var book = repo.FindBook(id) ?? throw new NotFoundException("Book", id);
+    return Results.Ok(book);
+});
+
+app.MapPost("/loans", (LoanRequest request, LibraryService service) =>
+    Results.Ok(service.LoanBook(request.ReaderId, request.BookId)));
+
+app.MapPost("/returns", (LoanRequest request, LibraryService service) =>
+{
+    service.ReturnBook(request.ReaderId, request.BookId);
+    return Results.Ok();
+});
+
+
+
+
+
+
+
+using Library.App.Exceptions;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Mvc;
+
+namespace Library.Api;
+
+public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
+{
+    public async ValueTask<bool> TryHandleAsync(HttpContext context, Exception exception, CancellationToken ct)
+    {
+        // 3.1. Разделение уровней логирования
+        if (exception is DomainException domainException)
+        {
+            logger.LogWarning("Нарушено бизнес-правило {ErrorCode} [{TraceId}]: {Message}", 
+                domainException.ErrorCode, context.TraceIdentifier, domainException.Message);
+        }
+        else
+        {
+            logger.LogError(exception, "Непредвиденная ошибка при обработке запроса {Path} [{TraceId}]", 
+                context.Request.Path, context.TraceIdentifier);
+        }
+
+        var (status, title) = exception switch
+        {
+            NotFoundException => (StatusCodes.Status404NotFound, "Ресурс не найден"),
+            DataAccessException => (StatusCodes.Status503ServiceUnavailable, "Сервис временно недоступен"),
+            DomainException => (StatusCodes.Status422UnprocessableEntity, "Нарушено бизнес-правило"),
+            _ => (StatusCodes.Status500InternalServerError, "Внутренняя ошибка сервера")
+        };
+
+        var problem = new ProblemDetails
+        {
+            Status = status,
+            Title = title
+        };
+
+        // 3.2. Добавляем детальное сообщение только для доменных ошибок (но не для 500/синтетических сбоев безопасности)
+        if (exception is DomainException)
+        {
+            problem.Detail = exception.Message;
+        }
+
+        if (exception is AppException appException)
+        {
+            problem.Extensions["errorCode"] = appException.ErrorCode;
+        }
+
+        // 3.2. Связь ответа и лога через TraceId
+        problem.Extensions["traceId"] = context.TraceIdentifier;
+
+        context.Response.StatusCode = status;
+        await context.Response.WriteAsJsonAsync(problem, ct);
+
+        return true;
+    }
+}
+
+
+
+
+
+dotnet add Library.Api package Serilog.Formatting.Compact
+
+
+
+
+
+
+using Serilog.Formatting.Compact; // Не забудьте подключить пространство имён
+
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.File("logs/app-.log", rollingInterval: RollingInterval.Day)
+    .WriteTo.File(new CompactJsonFormatter(), "logs/app-.json", rollingInterval: RollingInterval.Day) // JSON-логгер
+    .CreateLogger();
+
+
+
+
+
+
+
+
+    var app = builder.Build();
+
+app.UseExceptionHandler();
+app.UseSerilogRequestLogging(); // Логирование HTTP-запросов ASP.NET Core через Serilog
