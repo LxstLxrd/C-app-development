@@ -1,0 +1,155 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+// Учебные данные
+var customers = new List<Customer>
+{
+    new(1, "Анна", "Москва"),
+    new(2, "Борис", "Казань"),
+    new(3, "Виктор", "Москва"),
+    new(4, "Галина", "Тверь"),
+};
+
+var orders = new List<Order>
+{
+    new(101, 1, 1500m, new DateOnly(2026, 9, 1)),
+    new(102, 1, 700m, new DateOnly(2026, 9, 5)),
+    new(103, 2, 3200m, new DateOnly(2026, 9, 7)),
+    new(104, 3, 450m, new DateOnly(2026, 9, 9)),
+    new(105, 3, 2100m, new DateOnly(2026, 9, 12)),
+    new(106, 2, 980m, new DateOnly(2026, 9, 15)),
+};
+
+Console.WriteLine("=== Задание 1 ===");
+// Выведите номера и суммы всех заказов, сумма которых больше 1000.
+var highOrders = orders.Where(o => o.Total > 1000m);
+foreach (var o in highOrders)
+{
+    Console.WriteLine($"{o.Id}: {o.Total}");
+}
+
+Console.WriteLine("\n=== Задание 2 ===");
+// Получите имена клиентов из Москвы, отсортированные по алфавиту. Выведите их в одну строку через запятую.
+var moscowClients = customers
+    .Where(c => c.City == "Москва")
+    .OrderBy(c => c.Name)
+    .Select(c => c.Name);
+
+Console.WriteLine(string.Join(", ", moscowClients));
+
+Console.WriteLine("\n=== Задание 3 ===");
+// Выведите три самых крупных заказа (по убыванию суммы; при равных суммах - по дате по возрастанию).
+var topThreeOrders = orders
+    .OrderByDescending(o => o.Total)
+    .ThenBy(o => o.Date)
+    .Take(3);
+
+foreach (var o in topThreeOrders)
+{
+    Console.WriteLine($"{o.Id}: {o.Total} ({o.Date:dd.MM.yyyy})");
+}
+
+Console.WriteLine("\n=== Задание 4 ===");
+// Агрегация по всем заказам
+int count = orders.Count();
+decimal sum = orders.Sum(o => o.Total);
+decimal average = Math.Round(orders.Average(o => o.Total), 2);
+decimal min = orders.Min(o => o.Total);
+var maxOrder = orders.MaxBy(o => o.Total);
+
+Console.WriteLine($"Количество: {count}");
+Console.WriteLine($"Сумма: {sum}");
+Console.WriteLine($"Средняя: {average}");
+Console.WriteLine($"Минимальная: {min}");
+Console.WriteLine($"Самый крупный заказ: {maxOrder}");
+
+Console.WriteLine("\n=== Задание 5 ===");
+// Группировка клиентов по городу
+var cityGroups = customers.GroupBy(c => c.City);
+foreach (var group in cityGroups)
+{
+    Console.WriteLine($"{group.Key}: {group.Count()}");
+}
+
+Console.WriteLine("\n=== Задание 6 ===");
+// Группировка заказов по CustomerId + агрегация
+var customerStats = orders
+    .GroupBy(o => o.CustomerId)
+    .Select(g => new { CustomerId = g.Key, Count = g.Count(), TotalSum = g.Sum(o => o.Total) });
+
+foreach (var stat in customerStats)
+{
+    Console.WriteLine($"Клиент {stat.CustomerId}: заказов {stat.Count}, сумма {stat.TotalSum}");
+}
+
+Console.WriteLine("\n=== Задание 7 (Method Syntax) ===");
+// Внутреннее соединение (Join) через методы
+var joinedMethod = customers
+    .Join(orders, 
+        c => c.Id, 
+        o => o.CustomerId, 
+        (c, o) => new { c.Name, o.Id, o.Total })
+    .OrderBy(x => x.Id);
+
+foreach (var item in joinedMethod)
+{
+    Console.WriteLine($"{item.Name} – заказ {item.Id} – {item.Total}");
+}
+
+Console.WriteLine("\n=== Задание 7 (Query Syntax - Альтернатива) ===");
+// Внутреннее соединение через query syntax
+var joinedQuery = from c in customers
+                  join o in orders on c.Id equals o.CustomerId
+                  orderby o.Id
+                  select new { c.Name, o.Id, o.Total };
+
+foreach (var item in joinedQuery)
+{
+    Console.WriteLine($"{item.Name} – заказ {item.Id} – {item.Total}");
+}
+
+Console.WriteLine("\n=== Задание 8 ===");
+// Отчёт по всем клиентам (включая тех, у кого нет заказов) через GroupJoin
+var report = customers.GroupJoin(
+    orders,
+    c => c.Id,
+    o => o.CustomerId,
+    (c, custOrders) => new {
+        c.Name,
+        Count = custOrders.Count(),
+        Total = custOrders.Sum(o => o.Total)
+    });
+
+foreach (var item in report)
+{
+    Console.WriteLine($"{item.Name}: {item.Count} заказ(ов), сумма {item.Total}");
+}
+
+Console.WriteLine("\n=== Бонусные задания ===");
+// Б1. Отложенное выполнение
+var bigOrders = orders.Where(o => o.Total > 2000m);
+Console.WriteLine(bigOrders.Count()); // Выведет 2 (заказы 103 и 105)
+orders.Add(new Order(107, 4, 5000m, new DateOnly(2026, 9, 20)));
+Console.WriteLine(bigOrders.Count()); // Выведет 3, так как запрос выполнился повторно в момент вызова Count() и учел новый элемент.
+// (Если бы использовали .ToList(), то кэш выполнился бы сразу, и второй вывод показал бы 2).
+
+// Б2. Кванторы
+Console.WriteLine($"Все ли заказы дороже 400? {orders.All(o => o.Total > 400)}");
+Console.WriteLine($"Есть ли хоть один заказ дороже 3000? {orders.Any(o => o.Total > 3000)}");
+Console.WriteLine($"Есть ли клиенты из Казани? {customers.Any(c => c.City == "Казань")}");
+
+// Б3. Сумма по городам
+var citySums = customers
+    .GroupJoin(orders, c => c.Id, o => o.CustomerId, (c, custOrders) => new { c.City, Total = custOrders.Sum(o => o.Total) })
+    .GroupBy(x => x.City)
+    .Select(g => new { City = g.Key, Sum = g.Sum(x => x.Total) });
+
+foreach (var cs in citySums)
+{
+    Console.WriteLine($"{cs.City}: {cs.Sum}");
+}
+
+// Вспомогательные записи (records)
+public record Customer(int Id, string Name, string City);
+public record Order(int Id, int CustomerId, decimal Total, DateOnly Date);
