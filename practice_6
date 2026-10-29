@@ -1,0 +1,305 @@
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Practice06.Level1;
+
+public sealed class ThreadSafeList<T> : IEnumerable<T>
+{
+    private readonly List<T> _items = new();
+    private readonly object _sync = new(); // закрытый объект-замок[cite: 80]
+
+    public void Add(T item)
+    {
+        lock (_sync)
+        {
+            _items.Add(item);
+        }
+    }
+
+    public bool Remove(T item)
+    {
+        lock (_sync)
+        {
+            return _items.Remove(item);
+        }
+    }
+
+    public bool Contains(T item)
+    {
+        lock (_sync)
+        {
+            return _items.Contains(item);
+        }
+    }
+
+    public int Count
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _items.Count;
+            }
+        }
+    }
+
+    public T this[int index]
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _items[index];
+            }
+        }
+        set
+        {
+            lock (_sync)
+            {
+                _items[index] = value;
+            }
+        }
+    }
+
+    /// <summary>Возвращает снимок (копию) содержимого на момент вызова.</summary>
+    public T[] ToArray()
+    {
+        lock (_sync)
+        {
+            return _items.ToArray();
+        }
+    }
+
+    /// <summary>Атомарно добавляет элемент, если его ещё нет. Возвращает true, если добавил.</summary>
+    public bool AddIfNotExists(T item)
+    {
+        lock (_sync)
+        {
+            if (!_items.Contains(item))
+            {
+                _items.Add(item);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    public IEnumerator<T> GetEnumerator()
+    {
+        // Перечисление по снимку, а не по внутреннему списку
+        T[] snapshot = ToArray();
+        foreach (var item in snapshot)
+        {
+            yield return item;
+        }
+    }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+}
+
+
+
+
+using System;
+using System.Collections.Generic;
+using System.Threading;
+
+namespace Practice06.Level2;
+
+public sealed class ThreadSafeCache<TKey, TValue> : IDisposable where TKey : notnull
+{
+    private readonly Dictionary<TKey, TValue> _data = new();
+    private readonly ReaderWriterLockSlim _rw = new();
+    private long _hits;
+    private long _misses;
+
+    public bool TryGet(TKey key, out TValue value)
+    {
+        _rw.EnterReadLock();
+        try
+        {
+            bool found = _data.TryGetValue(key, out value!);
+            if (found)
+                Interlocked.Increment(ref _hits);
+            else
+                Interlocked.Increment(ref _misses);
+            return found;
+        }
+        finally
+        {
+            _rw.ExitReadLock();
+        }
+    }
+
+    public void Set(TKey key, TValue value)
+    {
+        _rw.EnterWriteLock();
+        try
+        {
+            _data[key] = value;
+        }
+        finally
+        {
+            _rw.ExitWriteLock();
+        }
+    }
+
+    public bool TryRemove(TKey key)
+    {
+        _rw.EnterWriteLock();
+        try
+        {
+            return _data.Remove(key);
+        }
+        finally
+        {
+            _rw.ExitWriteLock();
+        }
+    }
+
+    public TValue GetOrAdd(TKey key, Func<TKey, TValue> factory)
+    {
+        // 1. Быстрая проверка под Read Lock
+        _rw.EnterReadLock();
+        try
+        {
+            if (_data.TryGetValue(key, out var value))
+            {
+                Interlocked.Increment(ref _hits);
+                return value;
+            }
+        }
+        finally
+        {
+            _rw.ExitReadLock();
+        }
+
+        Interlocked.Increment(ref _misses);
+
+        // 2. Переходим в UpgradeableReadLock для безопасной проверки и возможного обновления
+        _rw.EnterUpgradeableReadLock();
+        try
+        {
+            // Двойная проверка: мог ли ключ появиться, пока мы ждали переход блокировки?[cite: 87]
+            if (_data.TryGetValue(key, out var value))
+            {
+                return value;
+            }
+
+            // Вызываем фабрику (гарантия однократного вызова для ключа)[cite: 84]
+            value = factory(key);
+
+            _rw.EnterWriteLock();
+            try
+            {
+                _data[key] = value;
+                return value;
+            }
+            finally
+            {
+                _rw.ExitWriteLock();
+            }
+        }
+        finally
+        {
+            _rw.ExitUpgradeableReadLock();
+        }
+    }
+
+    public (long Hits, long Misses) Stats =>
+        (Interlocked.Read(ref _hits), Interlocked.Read(ref _misses));
+
+    public void Dispose() => _rw.Dispose();
+}
+
+
+
+
+
+using System.Collections.Generic;
+using System.Threading;
+
+namespace Practice06.Level3;
+
+public sealed class LockFreeStack<T>
+{
+    private sealed class Node
+    {
+        public readonly T Value;
+        public Node? Next;
+        public Node(T value) => Value = value;
+    }
+
+    private Node? _head;
+    private int _count;
+
+    public void Push(T item)
+    {
+        var node = new Node(item);
+        var spin = new SpinWait();
+        while (true)
+        {
+            Node? current = Volatile.Read(ref _head);
+            node.Next = current;
+            
+            // CAS: если _head == current, то устанавливаем _head = node[cite: 90]
+            if (Interlocked.CompareExchange(ref _head, node, current) == current)
+            {
+                Interlocked.Increment(ref _count);
+                break;
+            }
+            spin.SpinOnce(); // Ожидание с экспоненциальной задержкой при конкуренции
+        }
+    }
+
+    public bool TryPop(out T value)
+    {
+        var spin = new SpinWait();
+        while (true)
+        {
+            Node? current = Volatile.Read(ref _head);
+            if (current == null)
+            {
+                value = default!;
+                return false;
+            }
+
+            Node? next = current.Next;
+            // CAS: если _head == current, то устанавливаем _head = next
+            if (Interlocked.CompareExchange(ref _head, next, current) == current)
+            {
+                Interlocked.Decrement(ref _count);
+                value = current.Value;
+                return true;
+            }
+            spin.SpinOnce();
+        }
+    }
+
+    public bool TryPeek(out T value)
+    {
+        Node? current = Volatile.Read(ref _head);
+        if (current == null)
+        {
+            value = default!;
+            return false;
+        }
+        value = current.Value;
+        return true;
+    }
+
+    public int Count => Volatile.Read(ref _count);
+
+    /// <summary>Снимок содержимого: от вершины к основанию.</summary>
+    public T[] ToArray()
+    {
+        Node? current = Volatile.Read(ref _head);
+        var list = new List<T>();
+        while (current != null)
+        {
+            list.Add(current.Value);
+            current = current.Next;
+        }
+        return list.ToArray();
+    }
+}
