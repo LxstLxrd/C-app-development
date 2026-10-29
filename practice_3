@@ -1,0 +1,696 @@
+using System;
+
+// 1. Аргументы для события повреждения босса
+public class BossDamagedEventArgs : EventArgs
+{
+    public int Amount { get; }
+    public int HpLeft { get; }
+
+    public BossDamagedEventArgs(int amount, int hpLeft)
+    {
+        Amount = amount;
+        HpLeft = hpLeft;
+    }
+}
+
+// Класс Босса (Издатель)
+public class Boss
+{
+    public string Name { get; }
+    public int MaxHp { get; }
+    private int _hp;
+    private bool _isDefeated = false;
+
+    public int Hp
+    {
+        get => _hp;
+        private set => _hp = Math.Max(0, value);
+    }
+
+    // События по стандартному шаблону .NET
+    public event EventHandler<BossDamagedEventArgs>? Damaged;
+    public event EventHandler? Defeated;
+
+    public Boss(string name, int maxHp)
+    {
+        Name = name;
+        MaxHp = maxHp;
+        Hp = maxHp;
+    }
+
+    public void TakeDamage(int amount)
+    {
+        // 4. Повторный урон по поверженному боссу не вызывает событий
+        if (_isDefeated) return;
+
+        // 3. Фактически нанесённый урон не может превышать текущее здоровье
+        int actualDamage = Math.Min(amount, Hp);
+        Hp -= actualDamage;
+
+        OnDamaged(new BossDamagedEventArgs(actualDamage, Hp));
+
+        if (Hp == 0)
+        {
+            _isDefeated = true;
+            OnDefeated();
+        }
+    }
+
+    protected virtual void OnDamaged(BossDamagedEventArgs e) => Damaged?.Invoke(this, e);
+    protected virtual void OnDefeated() => Defeated?.Invoke(this, EventArgs.Empty);
+}
+
+// 5. Подписчик BossHealthBar
+public class BossHealthBar
+{
+    public void Attach(Boss boss)
+    {
+        boss.Damaged += OnBossDamaged;
+    }
+
+    public void Detach(Boss boss)
+    {
+        boss.Damaged -= OnBossDamaged;
+    }
+
+    private void OnBossDamaged(object? sender, BossDamagedEventArgs e)
+    {
+        if (sender is Boss boss)
+        {
+            // Формат вывода: [НР босса] 250/300
+            Console.WriteLine($"[НР босса] {e.HpLeft}/{boss.MaxHp}");
+        }
+    }
+
+    -------------------------------------------------------------------------------------------------
+
+    using System;
+using System.Collections.Generic;
+
+public enum BossPhase { Phase1, Phase2, Phase3 }
+
+public class PhaseChangedEventArgs : EventArgs
+{
+    public BossPhase OldPhase { get; }
+    public BossPhase NewPhase { get; }
+
+    public PhaseChangedEventArgs(BossPhase oldPhase, BossPhase newPhase)
+    {
+        OldPhase = oldPhase;
+        NewPhase = newPhase;
+    }
+}
+
+// Расширенный класс Boss для уровня 2
+public class Boss
+{
+    public string Name { get; }
+    public int MaxHp { get; }
+    private int _hp;
+    private bool _isDefeated = false;
+
+    public int Hp
+    {
+        get => _hp;
+        private set => _hp = Math.Max(0, value);
+    }
+
+    public BossPhase Phase { get; private set; } = BossPhase.Phase1;
+
+    public event EventHandler<BossDamagedEventArgs>? Damaged;
+    public event EventHandler? Defeated;
+    public event EventHandler<PhaseChangedEventArgs>? PhaseChanged;
+
+    public Boss(string name, int maxHp)
+    {
+        Name = name;
+        MaxHp = maxHp;
+        Hp = maxHp;
+    }
+
+    public void TakeDamage(int amount)
+    {
+        if (_isDefeated) return;
+
+        int actualDamage = Math.Min(amount, Hp);
+        Hp -= actualDamage;
+
+        OnDamaged(new BossDamagedEventArgs(actualDamage, Hp));
+
+        // Проверка смены фаз, если босс еще жив
+        if (Hp > 0)
+        {
+            CheckPhaseTransitions();
+        }
+        else
+        {
+            _isDefeated = true;
+            OnDefeated();
+        }
+    }
+
+    private void CheckPhaseTransitions()
+    {
+        BossPhase targetPhase = CalculateCurrentPhase();
+        
+        // 2. Если мощный удар «перепрыгнул» фазу, вызываем события по порядку (1 -> 2 -> 3)
+        while (Phase != targetPhase)
+        {
+            BossPhase oldPhase = Phase;
+            Phase = GetNextPhase(Phase);
+            OnPhaseChanged(new PhaseChangedEventArgs(oldPhase, Phase));
+        }
+    }
+
+    private BossPhase CalculateCurrentPhase()
+    {
+        double ratio = (double)Hp / MaxHp;
+        if (ratio > 2.0 / 3.0) return BossPhase.Phase1;
+        if (ratio > 1.0 / 3.0) return BossPhase.Phase2;
+        return BossPhase.Phase3;
+    }
+
+    private BossPhase GetNextPhase(BossPhase current) => current switch
+    {
+        BossPhase.Phase1 => BossPhase.Phase2,
+        BossPhase.Phase2 => BossPhase.Phase3,
+        _ => BossPhase.Phase3
+    };
+
+    protected virtual void OnDamaged(BossDamagedEventArgs e) => Damaged?.Invoke(this, e);
+    protected virtual void OnDefeated() => Defeated?.Invoke(this, EventArgs.Empty);
+    protected virtual void OnPhaseChanged(PhaseChangedEventArgs e) => PhaseChanged?.Invoke(this, e);
+}
+
+// 4. Подписчик DamageLog
+public class DamageLog
+{
+    private readonly List<int> _damages = [];
+
+    public void Attach(Boss boss) => boss.Damaged += OnDamaged;
+    public void Detach(Boss boss) => boss.Damaged -= OnDamaged;
+
+    private void OnDamaged(object? sender, BossDamagedEventArgs e)
+    {
+        _damages.Add(e.Amount);
+    }
+
+    public void PrintStatistics()
+    {
+        int count = _damages.Count;
+        int sum = 0;
+        int max = 0;
+
+        foreach (var d in _damages)
+        {
+            sum += d;
+            if (d > max) max = d;
+        }
+
+        Console.WriteLine($"[DamageLog] Ударов: {count}, Суммарный урон: {sum}, Максимальный урон: {max}");
+    }
+}
+
+// 5. Подписчик LootSystem
+public class LootSystem
+{
+    private readonly Func<int, string> _rarityEvaluator;
+
+    public LootSystem(Func<int, string> rarityEvaluator)
+    {
+        _rarityEvaluator = rarityEvaluator;
+    }
+
+    public void Attach(Boss boss) => boss.Defeated += OnDefeated;
+    public void Detach(Boss boss) => boss.Defeated -= OnDefeated;
+
+    private void OnDefeated(object? sender, EventArgs e)
+    {
+        if (sender is Boss boss)
+        {
+            string rarity = _rarityEvaluator(5); // Уровень босса условно равен 5
+            Console.WriteLine($"[LootSystem] Выпал предмет редкости '{rarity}' с босса {boss.Name}!");
+        }
+    }
+}
+
+-----------------------------------------------------------------------------------------------------------------------
+
+using System;
+using System.Collections.Generic;
+
+public class DefeatingEventArgs : EventArgs
+{
+    public bool Cancel { get; set; }
+}
+
+public class Boss
+{
+    public string Name { get; }
+    public int MaxHp { get; }
+    private int _hp;
+    private bool _isDefeated = false;
+
+    public int Hp
+    {
+        get => _hp;
+        set => _hp = Math.Max(0, value);
+    }
+
+    public event EventHandler<BossDamagedEventArgs>? Damaged;
+    public event EventHandler<DefeatingEventArgs>? Defeating;
+    public event EventHandler? Defeated;
+
+    public Boss(string name, int maxHp)
+    {
+        Name = name;
+        MaxHp = maxHp;
+        Hp = maxHp;
+    }
+
+    public void TakeDamage(int amount)
+    {
+        if (_isDefeated) return;
+
+        int actualDamage = Math.Min(amount, Hp);
+        Hp -= actualDamage;
+
+        SafeInvokeDamaged(new BossDamagedEventArgs(actualDamage, Hp));
+
+        if (Hp == 0)
+        {
+            // 1. Создаем событие Defeating (до гибели)
+            var defeatingArgs = new DefeatingEventArgs();
+            SafeInvokeDefeating(defeatingArgs);
+
+            // Если какой-либо подписчик отменил гибель
+            if (defeatingArgs.Cancel)
+            {
+                return; // Босс не погибает
+            }
+
+            _isDefeated = true;
+            SafeInvokeDefeated();
+        }
+    }
+
+    // 3. Защита от сломанных подписчиков через GetInvocationList()
+    private void SafeInvokeDamaged(BossDamagedEventArgs e)
+    {
+        if (Damaged == null) return;
+        foreach (Delegate handler in Damaged.GetInvocationList())
+        {
+            try
+            {
+                ((EventHandler<BossDamagedEventArgs>)handler)(this, e);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Ошибка подписчика Damaged]: {ex.Message}");
+            }
+        }
+    }
+
+    private void SafeInvokeDefeating(DefeatingEventArgs e)
+    {
+        if (Defeating == null) return;
+        foreach (Delegate handler in Defeating.GetInvocationList())
+        {
+            try
+            {
+                ((EventHandler<DefeatingEventArgs>)handler)(this, e);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Ошибка подписчика Defeating]: {ex.Message}");
+            }
+        }
+    }
+
+    private void SafeInvokeDefeated()
+    {
+        if (Defeated == null) return;
+        foreach (Delegate handler in Defeated.GetInvocationList())
+        {
+            try
+            {
+                ((EventHandler)handler)(this, EventArgs.Empty);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Ошибка подписчика Defeated]: {ex.Message}");
+            }
+        }
+    }
+}
+
+// 2. Механика ярости (срабатывает 1 раз, восстанавливает 50 HP и отписывается)
+public class EnrageMechanic
+{
+    private bool _used = false;
+
+    public void Attach(Boss boss) => boss.Defeating += OnDefeating;
+    public void Detach(Boss boss) => boss.Defeating -= OnDefeating;
+
+    private void OnDefeating(object? sender, DefeatingEventArgs e)
+    {
+        if (!_used && sender is Boss boss)
+        {
+            _used = true;
+            e.Cancel = true; // Отменяем гибель
+            boss.Hp = 50;    // Восстанавливаем 50 HP
+            Console.WriteLine("[!] Дракон впадает в ярость!");
+
+            // Автоматическая отписка после срабатывания
+            boss.Defeating -= OnDefeating;
+        }
+    }
+}
+
+// 4. Рейд из нескольких боссов (RaidTracker)
+public class RaidTracker
+{
+    private int _defeatedCount = 0;
+    private readonly int _totalBosses;
+
+    public event EventHandler? RaidCompleted;
+
+    public RaidTracker(int totalBosses)
+    {
+        _totalBosses = totalBosses;
+    }
+
+    public void RegisterBoss(Boss boss)
+    {
+        boss.Defeated += OnBossDefeated;
+    }
+
+    private void OnBossDefeated(object? sender, EventArgs e)
+    {
+        if (sender is Boss boss)
+        {
+            _defeatedCount++;
+            Console.WriteLine($"[RaidTracker] Босс {boss.Name} повержен! ({_defeatedCount}/{_totalBosses})");
+
+            if (_defeatedCount >= _totalBosses)
+            {
+                Console.WriteLine("[RaidTracker] Все боссы повержены! Рейд успешно завершён!");
+                RaidCompleted?.Invoke(this, EventArgs.Empty);
+            }
+        }
+    }
+}
+
+------------------------------------------------------------------------------------------------------------------------
+using System;
+using System.Collections.Generic;
+
+public class KeyPressedEventArgs : EventArgs
+{
+    public ConsoleKey Key { get; }
+    public KeyPressedEventArgs(ConsoleKey key) => Key = key;
+}
+
+public class InputManager
+{
+    private readonly Func<ConsoleKey> _keyProvider;
+
+    public event EventHandler<KeyPressedEventArgs>? KeyPressed;
+    public event EventHandler? QuitRequested;
+
+    public InputManager(Func<ConsoleKey> keyProvider)
+    {
+        _keyProvider = keyProvider;
+    }
+
+    public void Run()
+    {
+        while (true)
+        {
+            ConsoleKey key = _keyProvider();
+            if (key == ConsoleKey.Escape)
+            {
+                QuitRequested?.Invoke(this, EventArgs.Empty);
+                break;
+            }
+            KeyPressed?.Invoke(this, new KeyPressedEventArgs(key));
+        }
+    }
+}
+
+public class Hero
+{
+    public int X { get; private set; } = 0;
+    public int Y { get; private set; } = 0;
+    private readonly int _fieldSize = 10;
+
+    public void Subscribe(InputManager inputManager)
+    {
+        inputManager.KeyPressed += OnKeyPressed;
+    }
+
+    private void OnKeyPressed(object? sender, KeyPressedEventArgs e)
+    {
+        int newX = X, newY = Y;
+
+        if (e.Key == ConsoleKey.W) newY++;
+        else if (e.Key == ConsoleKey.S) newY--;
+        else if (e.Key == ConsoleKey.A) newX--;
+        else if (e.Key == ConsoleKey.D) newX++;
+
+        // Проверка границ поля 10x10
+        if (newX >= 0 && newX < _fieldSize && newY >= 0 && newY < _fieldSize)
+        {
+            X = newX;
+            Y = newY;
+            Console.WriteLine($"Герой переместился в позицию ({X}, {Y})");
+        }
+        else
+        {
+            Console.WriteLine("Упёрся в стену!");
+        }
+    }
+}
+
+----------------------------------------------------------------------------------------------
+
+using System;
+using System.Collections.Generic;
+
+public enum GameAction { MoveUp, MoveDown, MoveLeft, MoveRight, Attack, Pause }
+
+public class ActionEventArgs : EventArgs
+{
+    public GameAction Action { get; }
+    public ActionEventArgs(GameAction action) => Action = action;
+}
+
+public class ActionMap
+{
+    private readonly Dictionary<ConsoleKey, GameAction> _bindings = new()
+    {
+        { ConsoleKey.W, GameAction.MoveUp },
+        { ConsoleKey.S, GameAction.MoveDown },
+        { ConsoleKey.A, GameAction.MoveLeft },
+        { ConsoleKey.D, GameAction.MoveRight },
+        { ConsoleKey.Spacebar, GameAction.Attack },
+        { ConsoleKey.P, GameAction.Pause }
+    };
+
+    public event EventHandler<ActionEventArgs>? ActionTriggered;
+
+    public void HandleKeyPressed(object? sender, KeyPressedEventArgs e)
+    {
+        if (_bindings.TryGetValue(e.Key, out GameAction action))
+        {
+            ActionTriggered?.Invoke(this, new ActionEventArgs(action));
+        }
+    }
+
+    public void Rebind(GameAction action, ConsoleKey newKey)
+    {
+        if (_bindings.ContainsKey(newKey))
+        {
+            throw new InvalidOperationException($"Клавиша {newKey} уже занята другим действием!");
+        }
+
+        // Удаляем старый привязанный ключ для этого действия, если он был
+        foreach (var pair in _bindings)
+        {
+            if (pair.Value == action)
+            {
+                _bindings.Remove(pair.Key);
+                break;
+            }
+        }
+
+        _bindings[newKey] = action;
+    }
+}
+
+public class Hero
+{
+    public int X { get; private set; } = 0;
+    public int Y { get; private set; } = 0;
+    private readonly int _fieldSize = 10;
+
+    public void Subscribe(ActionMap actionMap)
+    {
+        actionMap.ActionTriggered += OnActionTriggered;
+    }
+
+    public void Unsubscribe(ActionMap actionMap)
+    {
+        actionMap.ActionTriggered -= OnActionTriggered;
+    }
+
+    private void OnActionTriggered(object? sender, ActionEventArgs e)
+    {
+        int newX = X, newY = Y;
+
+        switch (e.Action)
+        {
+            case GameAction.MoveUp: newY++; break;
+            case GameAction.MoveDown: newY--; break;
+            case GameAction.MoveLeft: newX--; break;
+            case GameAction.MoveRight: newX++; break;
+            case GameAction.Attack:
+                Console.WriteLine("Удар мечом!");
+                return;
+        }
+
+        if (e.Action >= GameAction.MoveUp && e.Action <= GameAction.MoveRight)
+        {
+            if (newX >= 0 && newX < _fieldSize && newY >= 0 && newY < _fieldSize)
+            {
+                X = newX;
+                Y = newY;
+                Console.WriteLine($"Герой переместился в ({X}, {Y})");
+            }
+            else
+            {
+                Console.WriteLine("Упёрся в стену!");
+            }
+        }
+    }
+}
+
+public class InputStatistics
+{
+    private readonly Dictionary<GameAction, int> _stats = [];
+
+    public void Track(ActionMap actionMap)
+    {
+        actionMap.ActionTriggered += OnActionTriggered;
+    }
+
+    private void OnActionTriggered(object? sender, ActionEventArgs e)
+    {
+        if (!_stats.ContainsKey(e.Action)) _stats[e.Action] = 0;
+        _stats[e.Action]++;
+    }
+
+    public void PrintReport()
+    {
+        Console.WriteLine("\n--- Статистика ввода ---");
+        foreach (var pair in _stats)
+        {
+            Console.WriteLine($"{pair.Key}: {pair.Value} раз(а)");
+        }
+    }
+}
+
+-----------------------------------------------------------------------------------------
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+public record Combo(string Name, GameAction[] Sequence, TimeSpan Window);
+
+public class ComboPerformedEventArgs : EventArgs
+{
+    public Combo Combo { get; }
+    public ComboPerformedEventArgs(Combo combo) => Combo = combo;
+}
+
+public class ComboDetector
+{
+    private readonly List<Combo> _combos;
+    private readonly Func<DateTime> _timeProvider;
+    private readonly List<(GameAction Action, DateTime Timestamp)> _buffer = [];
+
+    public event EventHandler<ComboPerformedEventArgs>? ComboPerformed;
+
+    public ComboDetector(IEnumerable<Combo> combos, Func<DateTime> timeProvider)
+    {
+        _combos = [.. combos.OrderByDescending(c => c.Sequence.Length)]; // Сначала длинные комбо
+        _timeProvider = timeProvider;
+    }
+
+    public void OnActionTriggered(object? sender, ActionEventArgs e)
+    {
+        var now = _timeProvider();
+        _buffer.Add((e.Action, now));
+
+        // Проверяем совпадения среди зарегистрированных комбо
+        foreach (var combo in _combos)
+        {
+            if (CheckMatch(combo))
+            {
+                ComboPerformed?.Invoke(this, new ComboPerformedEventArgs(combo));
+                _buffer.Clear(); // Очищаем буфер после успешного комбо
+                break;
+            }
+        }
+    }
+
+    private bool CheckMatch(Combo combo)
+    {
+        if (_buffer.Count < combo.Sequence.Length) return false;
+
+        // Берем последние N действий по длине комбо
+        var slice = _buffer.TakeLast(combo.Sequence.Length).ToList();
+
+        // Проверяем тайминговое окно
+        var duration = slice.Last().Timestamp - slice.First().Timestamp;
+        if (duration > combo.Window) return false;
+
+        // Проверяем последовательность действий
+        for (int i = 0; i < combo.Sequence.Length; i++)
+        {
+            if (slice[i].Action != combo.Sequence[i]) return false;
+        }
+
+        return true;
+    }
+}
+
+public class InputRecorder
+{
+    private readonly List<(ConsoleKey Key, TimeSpan Delay)> _recordedInputs = [];
+    private DateTime _startTime;
+
+    public void StartRecording()
+    {
+        _startTime = DateTime.Now;
+        _recordedInputs.Clear();
+    }
+
+    public void RecordKey(ConsoleKey key)
+    {
+        var delay = DateTime.Now - _startTime;
+        _recordedInputs.Add((key, delay));
+    }
+
+    public Func<ConsoleKey> CreatePlaybackProvider()
+    {
+        int index = 0;
+        return () =>
+        {
+            if (index >= _recordedInputs.Count) return ConsoleKey.Escape;
+            var input = _recordedInputs[index++];
+            return input.Key;
+        };
+    }
+}
+}
