@@ -1,0 +1,162 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+
+class GameItem
+{
+    public string Name { get; }
+    public int Price { get; }
+    public GameItem(string name, int price)
+    {
+        Name = name;
+        Price = price;
+    }
+}
+
+class Player
+{
+    public int Coins { get; private set; } = 100;
+
+    // Событие изменения баланса (средний уровень)
+    public event Action<int>? BalanceChanged;
+
+    public void Buy(int price)
+    {
+        // TODO L1: отклонить цену <= 0 нужным исключением.
+        if (price <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(price), "Цена должна быть положительной");
+        }
+
+        // TODO L2: отклонить покупку, если монет недостаточно.
+        if (price > Coins)
+        {
+            throw new InvalidOperationException("Недостаточно монет");
+        }
+
+        // TODO L3: списать цену успешной покупки.
+        Coins -= price;
+
+        // TODO M2: сообщить подписчикам новый баланс.
+        BalanceChanged?.Invoke(Coins);
+    }
+}
+
+class RewardCounter
+{
+    private readonly object sync = new object();
+    private int value = 0;
+    
+    public int Value
+    {
+        get
+        {
+            lock (sync)
+            {
+                return value;
+            }
+        }
+    }
+
+    public void AddOne()
+    {
+        // TODO H1: увеличить value на 1 внутри lock (sync).
+        lock (sync)
+        {
+            value++;
+        }
+    }
+}
+
+class Program
+{
+    static void Main()
+    {
+        var items = new List<GameItem>
+        {
+            new GameItem("Стальной меч", 120),
+            new GameItem("Зелье лечения", 30),
+            new GameItem("Деревянный щит", 50),
+            new GameItem("Магический посох", 80)
+        };
+
+        var player = new Player();
+
+        // TODO M1: подписаться на player.BalanceChanged через +=.
+        player.BalanceChanged += newBalance => Console.WriteLine($"Баланс изменён: {newBalance}");
+
+        Console.WriteLine($"Старт: {player.Coins}");
+        TryBuy(player, 30);
+        TryBuy(player, 80);
+        TryBuy(player, 0);
+        TryBuy(player, -10);
+        Console.WriteLine($"Итог: {player.Coins}");
+
+        // TODO M4: раскомментировать на среднем уровне[cite: 97].
+        ShowAffordable(items);
+
+        // TODO H4: раскомментировать на тяжёлом уровне.
+        RunRewards();
+    }
+
+    static void TryBuy(Player player, int price)
+    {
+        try
+        {
+            player.Buy(price);
+            Console.WriteLine($"Покупка за {price}: успешно");
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            Console.WriteLine($"Покупка за {price}: цена должна быть положительной");
+        }
+        catch (InvalidOperationException)
+        {
+            Console.WriteLine($"Покупка за {price}: недостаточно монет");
+        }
+    }
+
+    static void ShowAffordable(List<GameItem> items)
+    {
+        // TODO M3: заменить эту строку LINQ-запросом (отбор <= 50, сортировка по возрастанию цены)[cite: 97].
+        var affordable = items.Where(i => i.Price <= 50).OrderBy(i => i.Price).ToList();
+        
+        Console.WriteLine("Предметы не дороже 50:");
+        foreach (var item in affordable)
+        {
+            Console.WriteLine($"{item.Name}: {item.Price}");
+        }
+    }
+
+    static void RunRewards()
+    {
+        var counter = new RewardCounter();
+
+        var first = new Thread(() =>
+        {
+            for (int i = 0; i < 1000; i++)
+            {
+                counter.AddOne();
+            }
+        });
+
+        var second = new Thread(() =>
+        {
+            for (int i = 0; i < 1000; i++)
+            {
+                counter.AddOne();
+            }
+        });
+
+        // TODO H2: запустить first и second[cite: 98].
+        first.Start();
+        second.Start();
+
+        // TODO H3: дождаться first и second[cite: 98].
+        first.Join();
+        second.Join();
+
+        Console.WriteLine($"Награды: {counter.Value}");
+    }
+}
