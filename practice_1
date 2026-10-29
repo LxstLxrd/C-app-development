@@ -1,0 +1,168 @@
+using System;
+using System.IO;
+
+// --- Абстракции и вспомогательные классы для Лёгкого уровня ---
+
+public class Enemy
+{
+    public string Name = "";
+    public int Health;
+    public virtual void Move() => Console.WriteLine($"{Name} walks towards the player");
+}
+
+// Отдельный класс для сохранения игры (SRP)
+public class SaveSystem
+{
+    public void Save(Player player)
+    {
+        File.WriteAllText("save.txt", $"{player.Name}; {player.Health}; {player.Gold}; {player.X}; {player.Y}");
+        Console.WriteLine("Game saved!");
+    }
+}
+
+// Отдельный класс для логирования боёв (SRP)
+public class CombatLogger
+{
+    public void LogAttack(string attackerName, string defenderName, int damage)
+    {
+        File.AppendAllText("combat.log", $"{DateTime.Now}: {attackerName} -> {defenderName}, {damage}\n");
+    }
+}
+
+public class Player
+{
+    public string Name = "";
+    public int Health = 100;
+    public int Gold = 50;
+    public string WeaponType = "Sword";
+    public int X, Y;
+
+    private readonly SaveSystem _saveSystem = new();
+    private readonly CombatLogger _combatLogger = new();
+
+    public void Move(string direction)
+    {
+        if (direction == "up") Y++;
+        else if (direction == "down") Y--;
+        else if (direction == "left") X--;
+        else if (direction == "right") X++;
+        
+        Console.WriteLine($"{Name} moved to ({X}, {Y})");
+    }
+
+    public int Attack(Enemy enemy)
+    {
+        int damage = 0;
+        if (WeaponType == "Sword") damage = 10;
+        else if (WeaponType == "Bow") damage = 7;
+        else if (WeaponType == "Staff") damage = 12;
+
+        enemy.Health -= damage;
+        Console.WriteLine($"{Name} hits {enemy.Name} for {damage} damage");
+
+        // Логирование делегировано специализированному классу
+        _combatLogger.LogAttack(Name, enemy.Name, damage);
+
+        return damage;
+    }
+
+    public void BuyItem(string item)
+    {
+        int price = 0;
+        if (item == "potion") price = 20;
+        else if (item == "shield") price = 40;
+
+        if (Gold >= price)
+        {
+            Gold -= price;
+            Console.WriteLine($"{Name} bought {item}. Gold left: {Gold}");
+        }
+        else
+        {
+            Console.WriteLine("Not enough gold!");
+        }
+    }
+
+    public void SaveGame()
+    {
+        _saveSystem.Save(this);
+    }
+
+    // 1. Интерфейс оружия
+public interface IWeapon
+{
+    string Name { get; }
+    int Damage { get; }
+}
+
+// 2. Реализации конкретного оружия
+public class Sword : IWeapon
+{
+    public string Name => "Sword";
+    public int Damage => 10;
+}
+
+public class Bow : IWeapon
+{
+    public string Name => "Bow";
+    public int Damage => 7;
+}
+
+public class Staff : IWeapon
+{
+    public string Name => "Staff";
+    public int Damage => 12;
+}
+
+// Бонусное оружие по заданию: Axe
+public class Axe : IWeapon
+{
+    public string Name => "Axe";
+    public int Damage => 15;
+}
+
+// Интерфейс для тех, кто умеет двигаться
+public interface IMovable
+{
+    void Move();
+}
+
+// Базовый класс врага (теперь без принудительного Move для всех)
+public class Enemy
+{
+    public string Name = "";
+    public int Health;
+}
+
+// Обычный враг умеет ходить
+public class WalkingEnemy : Enemy, IMovable
+{
+    public void Move() => Console.WriteLine($"{Name} walks towards the player");
+}
+
+// Турель — это враг, но она НЕ умеет ходить (LSP соблюден)
+public class TurretEnemy : Enemy
+{
+    // Никаких NotSupportedException!
+}
+
+var hero = new Player { Name = "Arthas" };
+// Применяем новое оружие через интерфейс IWeapon (OCP)
+// hero.Weapon = new Sword(); 
+
+var goblin = new WalkingEnemy { Name = "Goblin", Health = 30 };
+var turret = new TurretEnemy { Name = "Laser Turret", Health = 50 };
+
+hero.Move("up");
+hero.Attack(goblin);
+hero.BuyItem("potion");
+hero.SaveGame();
+
+// Проверка безопасного обхода движущихся врагов (LSP)
+List<IMovable> movableEntities = [ goblin ];
+foreach (var entity in movableEntities)
+{
+    entity.Move(); // Никаких падений с NotSupportedException
+}
+
+}
