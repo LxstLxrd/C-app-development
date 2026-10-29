@@ -1,0 +1,233 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+
+public class GenericStack<T> : IEnumerable<T>
+{
+    private T[] _items;
+    private int _count;
+    private const int DefaultCapacity = 4;
+
+    public GenericStack()
+    {
+        _items = new T[DefaultCapacity];
+    }
+
+    public GenericStack(int capacity)
+    {
+        _items = new T[Math.Max(capacity, 1)];
+    }
+
+    public int Count => _count;
+    public int Capacity => _items.Length;
+
+    // Добавление элемента на вершину стека
+    public void Push(T item)
+    {
+        if (_count == _items.Length)
+        {
+            // Увеличиваем массив в 2 раза при переполнении
+            int newCapacity = _items.Length * 2;
+            Array.Resize(ref _items, newCapacity);
+        }
+
+        _items[_count++] = item;
+    }
+
+    // Удаление и возврат элемента с вершины стека
+    public T Pop()
+    {
+        if (_count == 0)
+        {
+            throw new InvalidOperationException("Стек пуст.");
+        }
+
+        _count--;
+        T item = _items[_count];
+        _items[_count] = default!; // Предотвращаем утечку памяти (gc reference clearing)
+        return item;
+    }
+
+    // Просмотр элемента с вершины без удаления
+    public T Peek()
+    {
+        if (_count == 0)
+        {
+            throw new InvalidOperationException("Стек пуст.");
+        }
+
+        return _items[_count - 1];
+    }
+
+    // Безопасное извлечение с помощью out (паттерн TryGet)
+    public bool TryPop(out T? value)
+    {
+        if (_count == 0)
+        {
+            value = default;
+            return false;
+        }
+
+        _count--;
+        value = _items[_count];
+        _items[_count] = default!;
+        return true;
+    }
+
+    // Реализация IEnumerable<T> через yield return
+    public IEnumerator<T> GetEnumerator()
+    {
+        // Идем от вершины стека к его дну
+        for (int i = _count - 1; i >= 0; i--)
+        {
+            yield return _items[i];
+        }
+    }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+}
+
+class Program
+{
+    static void Main()
+    {
+        var stack = new GenericStack<int>();
+        stack.Push(10);
+        stack.Push(20);
+        stack.Push(30);
+
+        Console.WriteLine($"Вершина стека (Peek): {stack.Peek()}"); // 30
+
+        Console.WriteLine("Элементы в стеке (от вершины к дну):");
+        foreach (var item in stack)
+        {
+            Console.WriteLine(item); // 30, 20, 10
+        }
+
+        Console.WriteLine($"Извлечено (Pop): {stack.Pop()}"); // 30
+        Console.WriteLine($"Количество элементов после Pop: {stack.Count}"); // 2
+    }
+}
+
+--------------------------------------------------------------------------------------------------------------
+
+  using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+
+class Program
+{
+    static void Main()
+    {
+        int elementCount = 100_000;
+        Console.WriteLine($"=== Сравнение коллекций на {elementCount:N0} элементах ===\n");
+
+        // 1. Тест List<T>
+        RunListTests(elementCount);
+
+        // 2. Тест HashSet<T>
+        RunHashSetTests(elementCount);
+
+        // 3. Тест LinkedList<T>
+        RunLinkedListTests(elementCount);
+
+        // 4. Тест Dictionary<TKey, TValue>
+        RunDictionaryTests(elementCount);
+    }
+
+    static void RunListTests(int count)
+    {
+        var stopwatch = new Stopwatch();
+        var list = new List<T>();
+
+        // Добавление (Add в конец - O(1) амортизированное)
+        stopwatch.Start();
+        for (int i = 0; i < count; i++) list.Add(i);
+        stopwatch.Stop();
+        Console.WriteLine($"List<T>    | Добавление: {stopwatch.ElapsedMilliseconds} мс");
+
+        // Поиск (Contains - O(n))
+        stopwatch.Restart();
+        bool found = list.Contains(count - 1);
+        stopwatch.Stop();
+        Console.WriteLine($"           | Поиск (в конце): {stopwatch.ElapsedTicks} такт(ов)");
+
+        // Удаление (Remove в начале - O(n) со смещением элементов)
+        stopwatch.Restart();
+        list.RemoveAt(0);
+        stopwatch.Stop();
+        Console.WriteLine($"           | Удаление первого: {stopwatch.ElapsedTicks} такт(ов)\n");
+    }
+
+    static void RunHashSetTests(int count)
+    {
+        var stopwatch = new Stopwatch();
+        var hashSet = new HashSet<int>();
+
+        // Добавление (Add - O(1) в среднем)
+        stopwatch.Start();
+        for (int i = 0; i < count; i++) hashSet.Add(i);
+        stopwatch.Stop();
+        Console.WriteLine($"HashSet<T> | Добавление: {stopwatch.ElapsedMilliseconds} мс");
+
+        // Поиск (Contains - O(1) в среднем)
+        stopwatch.Restart();
+        bool found = hashSet.Contains(count - 1);
+        stopwatch.Stop();
+        Console.WriteLine($"           | Поиск: {stopwatch.ElapsedTicks} такт(ов)");
+
+        // Удаление (Remove - O(1) в среднем)
+        stopwatch.Restart();
+        hashSet.Remove(0);
+        stopwatch.Stop();
+        Console.WriteLine($"           | Удаление: {stopwatch.ElapsedTicks} такт(ов)\n");
+    }
+
+    static void RunLinkedListTests(int count)
+    {
+        var stopwatch = new Stopwatch();
+        var linkedList = new LinkedList<int>();
+
+        // Добавление в конец (AddLast - O(1))
+        stopwatch.Start();
+        for (int i = 0; i < count; i++) linkedList.AddLast(i);
+        stopwatch.Stop();
+        Console.WriteLine($"LinkedList | Добавление (в конец): {stopwatch.ElapsedMilliseconds} мс");
+
+        // Поиск (Contains - O(n), т.к. требуется линейный обход узлов)
+        stopwatch.Restart();
+        bool found = linkedList.Contains(count - 1);
+        stopwatch.Stop();
+        Console.WriteLine($"           | Поиск: {stopwatch.ElapsedMilliseconds} мс (линейный обход)");
+
+        // Удаление первого (RemoveFirst - O(1))
+        stopwatch.Restart();
+        linkedList.RemoveFirst();
+        stopwatch.Stop();
+        Console.WriteLine($"           | Удаление первого: {stopwatch.ElapsedTicks} такт(ов)\n");
+    }
+
+    static void RunDictionaryTests(int count)
+    {
+        var stopwatch = new Stopwatch();
+        var dict = new Dictionary<int, string>();
+
+        // Добавление (Add - O(1) в среднем)
+        stopwatch.Start();
+        for (int i = 0; i < count; i++) dict[i] = "Value_" + i;
+        stopwatch.Stop();
+        Console.WriteLine($"Dictionary | Добавление: {stopwatch.ElapsedMilliseconds} мс");
+
+        // Поиск по ключу (ContainsKey - O(1) в среднем)
+        stopwatch.Restart();
+        bool found = dict.ContainsKey(count - 1);
+        stopwatch.Stop();
+        Console.WriteLine($"           | Поиск по ключу: {stopwatch.ElapsedTicks} такт(ов)");
+
+        // Удаление (Remove - O(1) в среднем)
+        stopwatch.Restart();
+        dict.Remove(0);
+        stopwatch.Stop();
+        Console.WriteLine($"           | Удаление: {stopwatch.ElapsedTicks} такт(ов)\n");
+    }
+}
